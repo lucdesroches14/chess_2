@@ -158,7 +158,7 @@ function App() {
         <div className="lobby-container">
           <div className="logo">
             <span className="logo-icon">♟</span>
-            <h1>FOG CHESS</h1>
+            <h1>CHESS 2</h1>
             <p className="tagline">Hide your king. Find theirs.</p>
           </div>
           <div className="lobby-actions">
@@ -193,7 +193,7 @@ function App() {
         <div className="lobby-container">
           <div className="logo">
             <span className="logo-icon">♟</span>
-            <h1>FOG CHESS</h1>
+            <h1>CHESS 2</h1>
           </div>
           <div className="waiting-panel">
             <p className="waiting-label">Waiting for opponent...</p>
@@ -223,7 +223,7 @@ function App() {
       <div className="game-layout">
         {/* Left sidebar */}
         <div className="sidebar left">
-          <div className="brand">♟ FOG CHESS</div>
+          <div className="brand">♟ CHESS 2</div>
           <div className="player-info">
             <div className={`player-card ${myColor} ${isMyTurn ? 'active' : ''}`}>
               <span className="player-symbol">{myColor === 'white' ? '♔' : '♚'}</span>
