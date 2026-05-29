@@ -17,7 +17,7 @@
   --sq-dark-hover: #c79a6b;
   --selected: rgba(20, 85, 30, 0.7);
   --legal: rgba(20, 85, 30, 0.4);
-  --last-move: rgba(155, 199, 0, 0.35);
+  --last-move: rgba(207, 162, 45, 0.5);
   --check: rgba(200, 30, 30, 0.7);
   --text: #e8e0d0;
   --text2: #a09080;
@@ -359,8 +359,17 @@ body {
   align-items: center;
 }
 
-.rank-label, .file-label {
+.rank-label {
   width: 20px;
+  font-size: 0.65rem;
+  color: var(--silver);
+  text-align: center;
+  font-family: 'Cinzel', serif;
+  flex-shrink: 0;
+}
+
+.file-label {
+  width: 72px;
   font-size: 0.65rem;
   color: var(--silver);
   text-align: center;
@@ -446,7 +455,16 @@ body {
   justify-content: center;
   transition: transform 0.1s;
   cursor: pointer;
-  filter: drop-shadow(0 2px 3px rgba(0,0,0,0.4));
+}
+
+.piece.white {
+  color: #ffffff;
+  filter: drop-shadow(0 0 2px rgba(0,0,0,0.95)) drop-shadow(0 2px 4px rgba(0,0,0,0.6));
+}
+
+.piece.black {
+  color: #111111;
+  filter: drop-shadow(0 0 2px rgba(160,120,50,0.7)) drop-shadow(0 2px 4px rgba(0,0,0,0.5));
 }
 
 .piece:hover { transform: scale(1.08); }
@@ -461,12 +479,20 @@ body {
   pointer-events: none;
 }
 
-.piece.true-king {
-  filter: drop-shadow(0 0 8px rgba(200, 168, 75, 0.7)) drop-shadow(0 2px 3px rgba(0,0,0,0.4));
+.piece.white.true-king {
+  filter: drop-shadow(0 0 2px rgba(0,0,0,0.95)) drop-shadow(0 0 8px rgba(200, 168, 75, 0.7)) drop-shadow(0 2px 3px rgba(0,0,0,0.4));
 }
 
-.piece.revealed-king {
-  filter: drop-shadow(0 0 10px rgba(200, 30, 30, 0.8)) drop-shadow(0 2px 3px rgba(0,0,0,0.4));
+.piece.black.true-king {
+  filter: drop-shadow(0 0 2px rgba(160,120,50,0.7)) drop-shadow(0 0 8px rgba(200, 168, 75, 0.7)) drop-shadow(0 2px 3px rgba(0,0,0,0.4));
+}
+
+.piece.white.revealed-king {
+  filter: drop-shadow(0 0 2px rgba(0,0,0,0.95)) drop-shadow(0 0 10px rgba(200, 30, 30, 0.8)) drop-shadow(0 2px 3px rgba(0,0,0,0.4));
+}
+
+.piece.black.revealed-king {
+  filter: drop-shadow(0 0 2px rgba(160,120,50,0.7)) drop-shadow(0 0 10px rgba(200, 30, 30, 0.8)) drop-shadow(0 2px 3px rgba(0,0,0,0.4));
 }
 
 /* ========== MOVE HISTORY ========== */
@@ -633,10 +659,12 @@ body {
   .move-history { max-height: 150px; flex: 1; min-width: 200px; }
   .rules-reminder { flex: 1; min-width: 200px; }
   .square { width: 56px; height: 56px; }
+  .file-label { width: 56px; }
   .piece { font-size: 2.4rem; }
 }
 
 @media (max-width: 600px) {
   .square { width: 44px; height: 44px; }
+  .file-label { width: 44px; }
   .piece { font-size: 1.9rem; }
 }
