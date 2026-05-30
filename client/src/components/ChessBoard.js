@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React from 'react'; // eslint-disable-line no-unused-vars
 import { PIECE_UNICODE, squareColor, colToFile, rowToRank } from '../utils/helpers';
 
 export default function ChessBoard({
@@ -6,14 +6,12 @@ export default function ChessBoard({
   myColor,
   myTrueKingId,
   opponentTrueKingId,
-  turn,
   status,
   isSelectingKing,
   onSquareClick,
   onKingSelect,
   selectedSquare,
   legalMoves,
-  lastMove,
   inCheck
 }) {
   const isFlipped = myColor === 'black';
@@ -23,10 +21,6 @@ export default function ChessBoard({
 
   const isLegalMove = (row, col) => legalMoves.some(([r,c]) => r === row && c === col);
   const isSelected = (row, col) => selectedSquare && selectedSquare[0] === row && selectedSquare[1] === col;
-  const isLastMove = (row, col) => lastMove && (
-    (lastMove.from[0] === row && lastMove.from[1] === col) ||
-    (lastMove.to[0] === row && lastMove.to[1] === col)
-  );
 
   const getTrueKingPos = () => {
     if (!myTrueKingId || !board) return null;
@@ -53,7 +47,7 @@ export default function ChessBoard({
     onSquareClick(row, col);
   };
 
-  const getPieceDisplay = (piece, row, col) => {
+  const getPieceDisplay = (piece) => {
     if (!piece) return null;
     const isMyTrueKing = piece.id === myTrueKingId;
     const isOpponentTrueKing = piece.id === opponentTrueKingId;
@@ -86,7 +80,6 @@ export default function ChessBoard({
               const sq = squareColor(row, col);
               const legal = isLegalMove(row, col);
               const selected = isSelected(row, col);
-              const lastMv = isLastMove(row, col);
               const check = isKingInCheck(row, col);
               const canSelect = isSelectingKing && piece && piece.color === myColor;
 
@@ -98,7 +91,6 @@ export default function ChessBoard({
                     sq,
                     selected ? 'selected' : '',
                     legal ? (piece ? 'capturable' : 'legal') : '',
-                    lastMv ? 'last-move' : '',
                     check ? 'in-check' : '',
                     canSelect ? 'can-select' : '',
                     status === 'finished' && piece?.id === opponentTrueKingId ? 'revealed' : ''
@@ -106,7 +98,7 @@ export default function ChessBoard({
                   onClick={() => handleClick(row, col)}
                 >
                   {legal && !piece && <span className="dot" />}
-                  {getPieceDisplay(piece, row, col)}
+                  {getPieceDisplay(piece)}
                 </div>
               );
             })}

@@ -249,8 +249,8 @@ io.on('connection', (socket) => {
     // Check if opponent's true king is now in check
     const opponentInCheck = isTrueKingInCheck(game.board, opponent, game.trueKings[opponent]);
 
-    // Check for checkmate
-    if (isCheckmate(game.board, opponent, newGameStateForLogic)) {
+    // Check for checkmate: opponent has no legal moves AND their king is in check
+    if (opponentInCheck && isCheckmate(game.board, opponent, newGameStateForLogic)) {
       game.status = 'finished';
       game.winner = player.color;
       io.to(game.colors['white']).emit('gameState', getGameState(game, 'white'));

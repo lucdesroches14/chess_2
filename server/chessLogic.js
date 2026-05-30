@@ -162,14 +162,7 @@ function getLegalMoves(board, row, col, gameState) {
     moves = moves.concat(castleMoves);
   }
 
-  // Filter moves that leave true king in check
-  moves = moves.filter(([tr, tc]) => {
-    const newBoard = applyMove(board, [row, col], [tr, tc]);
-    const kingPos = findTrueKing(newBoard, color, trueKingId);
-    if (!kingPos) return false; // King was captured (shouldn't happen in legal move filter)
-    return !isSquareAttackedBy(newBoard, kingPos[0], kingPos[1], opponent);
-  });
-
+  // Chess 2: players are NOT forced to escape check — all pseudo-legal moves are allowed
   return moves;
 }
 
