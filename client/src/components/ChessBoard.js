@@ -59,10 +59,11 @@ export default function ChessBoard({
     return (
       <span
         className={`piece ${piece.color} ${isMyTrueKing ? 'true-king' : ''} ${isOpponentTrueKing ? 'revealed-king' : ''}`}
-        title={isMyTrueKing ? '★ YOUR TRUE KING' : ''}
+        title={isMyTrueKing ? '★ YOUR TRUE KING' : isOpponentTrueKing ? '◆ OPPONENT\'S TRUE KING' : ''}
       >
         {symbol}
         {isMyTrueKing && <span className="king-marker">★</span>}
+        {isOpponentTrueKing && <span className="king-marker opponent-king-marker">◆</span>}
       </span>
     );
   };

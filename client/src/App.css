@@ -317,8 +317,10 @@ body {
 .board-area {
   position: relative;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 0.5rem;
 }
 
 .board-wrapper {
@@ -487,6 +489,11 @@ body {
   color: var(--gold);
   text-shadow: 0 0 6px rgba(200,168,75,0.8);
   pointer-events: none;
+}
+
+.king-marker.opponent-king-marker {
+  color: #e84040;
+  text-shadow: 0 0 6px rgba(220,40,40,0.8);
 }
 
 .piece.white.true-king {
@@ -664,6 +671,65 @@ body {
   font-style: italic;
   font-size: 0.95rem;
 }
+
+.game-over-capture-detail {
+  color: #e84040;
+  font-style: italic;
+  font-size: 0.88rem;
+  background: rgba(200, 40, 40, 0.08);
+  border: 1px solid rgba(200, 40, 40, 0.2);
+  border-radius: 4px;
+  padding: 0.4rem 0.75rem;
+}
+
+.btn-view-board {
+  background: transparent;
+  color: var(--silver);
+  border: 1px solid var(--border2);
+  border-radius: 4px;
+  padding: 0.45rem 1rem;
+  font-family: 'Cinzel', serif;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-view-board:hover {
+  color: var(--text);
+  border-color: var(--silver);
+}
+
+.game-over-restore {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: var(--bg2);
+  color: var(--gold);
+  border: 1px solid var(--gold);
+  border-radius: 4px;
+  padding: 0.35rem 0.7rem;
+  font-family: 'Cinzel', serif;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  z-index: 10;
+  transition: all 0.2s;
+}
+.game-over-restore:hover {
+  background: rgba(200, 168, 75, 0.12);
+}
+
+.king-legend {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-family: 'Cinzel', serif;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+}
+.legend-own { color: var(--gold); }
+.legend-sep { color: var(--silver); }
+.legend-opponent { color: #e84040; }
 
 .game-over-actions {
   display: flex;

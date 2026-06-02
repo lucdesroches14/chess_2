@@ -23,6 +23,7 @@ const io = new Server(httpServer, {
 });
 
 const games = {};
+const disconnectTimers = {}; // `${gameId}_${color}` -> timer id
 
 function createGame() {
   return {
@@ -30,6 +31,7 @@ function createGame() {
     board: initialBoard(),
     players: {},        // socketId -> { color }
     colors: {},         // color -> socketId (null for bot)
+    tokens: {},         // token -> color (durable player identity)
     trueKings: { white: null, black: null },
     kingSelectionDone: { white: false, black: false },
     castlingRights: {
@@ -106,7 +108,10 @@ function resolveMove(game, movingColor, from, to) {
     broadcastToPlayers(game, 'gameOver', {
       reason: 'capture',
       winner: movingColor,
-      message: `${movingColor === 'white' ? 'White' : 'Black'} Wins!`
+      message: `${movingColor === 'white' ? 'White' : 'Black'} Wins!`,
+      capturedKingType: targetPiece.type,
+      capturedKingSquare: to,
+      capturedKingColor: opponent
     });
     return;
   }
@@ -189,13 +194,52 @@ async function triggerBotMove(gameId) {
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
 
+  socket.on('rejoinGame', ({ gameId, token }) => {
+    const game = games[gameId];
+    if (!game || game.status === 'finished') return;
+    const color = game.tokens[token];
+    if (!color) return;
+
+    // Cancel any pending disconnect notification for this player
+    const timerKey = `${gameId}_${color}`;
+    if (disconnectTimers[timerKey]) {
+      clearTimeout(disconnectTimers[timerKey]);
+      delete disconnectTimers[timerKey];
+    }
+
+    // Rebind socket
+    const oldSocketId = game.colors[color];
+    if (oldSocketId && oldSocketId !== socket.id) {
+      delete game.players[oldSocketId];
+    }
+    game.players[socket.id] = { color };
+    game.colors[color] = socket.id;
+    socket.join(gameId);
+
+    socket.emit('gameRejoined', {
+      color,
+      gameId,
+      singlePlayer: game.mode === 'single',
+      status: game.status
+    });
+    socket.emit('gameState', getGameState(game, color));
+
+    if (game.status === 'selecting') {
+      socket.emit('gameStart', { message: 'Reconnected. Select your true king.' });
+    }
+
+    console.log(`Player rejoined game ${gameId} as ${color}`);
+  });
+
   socket.on('createGame', () => {
     const game = createGame();
     games[game.id] = game;
+    const token = uuidv4();
+    game.tokens[token] = 'white';
     game.players[socket.id] = { color: 'white' };
     game.colors['white'] = socket.id;
     socket.join(game.id);
-    socket.emit('gameCreated', { gameId: game.id, color: 'white' });
+    socket.emit('gameCreated', { gameId: game.id, color: 'white', token });
     console.log('Game created:', game.id);
   });
 
@@ -210,6 +254,8 @@ io.on('connection', (socket) => {
     game.difficulty = difficulty;
     game.botColor = botColor;
 
+    const token = uuidv4();
+    game.tokens[token] = humanColor;
     game.players[socket.id] = { color: humanColor };
     game.colors[humanColor] = socket.id;
     game.colors[botColor] = null; // bot has no socket
@@ -222,7 +268,7 @@ io.on('connection', (socket) => {
     socket.join(game.id);
 
     // singlePlayer flag tells the client to skip the waiting screen
-    socket.emit('gameCreated', { gameId: game.id, color: humanColor, singlePlayer: true });
+    socket.emit('gameCreated', { gameId: game.id, color: humanColor, singlePlayer: true, token });
     socket.emit('gameStart', { message: 'Choose your true king.' });
     socket.emit('gameState', getGameState(game, humanColor));
     console.log('Single-player game created:', game.id, 'difficulty:', difficulty);
@@ -233,12 +279,14 @@ io.on('connection', (socket) => {
     if (!game) { socket.emit('error', { message: 'Game not found' }); return; }
     if (Object.keys(game.players).length >= 2) { socket.emit('error', { message: 'Game is full' }); return; }
 
+    const token = uuidv4();
+    game.tokens[token] = 'black';
     game.players[socket.id] = { color: 'black' };
     game.colors['black'] = socket.id;
     socket.join(gameId);
     game.status = 'selecting';
 
-    socket.emit('gameJoined', { gameId, color: 'black' });
+    socket.emit('gameJoined', { gameId, color: 'black', token });
     io.to(gameId).emit('gameStart', { message: 'Both players connected. Select your true king.' });
     emitToColor(game, 'white', 'gameState', getGameState(game, 'white'));
     emitToColor(game, 'black', 'gameState', getGameState(game, 'black'));
@@ -357,6 +405,8 @@ io.on('connection', (socket) => {
       newGame.difficulty = oldGame.difficulty;
       newGame.botColor = newBotColor;
 
+      const token = uuidv4();
+      newGame.tokens[token] = newHumanColor;
       newGame.players[socket.id] = { color: newHumanColor };
       newGame.colors[newHumanColor] = socket.id;
       newGame.colors[newBotColor] = null;
@@ -366,13 +416,13 @@ io.on('connection', (socket) => {
       newGame.status = 'selecting';
       games[gameId] = newGame;
 
-      socket.emit('rematchStarted', { color: newHumanColor });
+      socket.emit('rematchStarted', { color: newHumanColor, token });
       socket.emit('gameStart', { message: 'Rematch! Choose your true king.' });
       socket.emit('gameState', getGameState(newGame, newHumanColor));
       return;
     }
 
-    // Multiplayer rematch: swap colors
+    // Multiplayer rematch: swap colors, generate new tokens
     const newGame = createGame();
     newGame.id = gameId;
     const whiteSocketId = oldGame.colors['white'];
@@ -382,10 +432,15 @@ io.on('connection', (socket) => {
     newGame.colors['white'] = blackSocketId;
     newGame.colors['black'] = whiteSocketId;
     newGame.status = 'selecting';
+
+    const tokenWhite = uuidv4();
+    const tokenBlack = uuidv4();
+    newGame.tokens[tokenWhite] = 'white';
+    newGame.tokens[tokenBlack] = 'black';
     games[gameId] = newGame;
 
-    io.to(newGame.colors['white']).emit('rematchStarted', { color: 'white' });
-    io.to(newGame.colors['black']).emit('rematchStarted', { color: 'black' });
+    io.to(newGame.colors['white']).emit('rematchStarted', { color: 'white', token: tokenWhite });
+    io.to(newGame.colors['black']).emit('rematchStarted', { color: 'black', token: tokenBlack });
     io.to(gameId).emit('gameStart', { message: 'Rematch! Select your true king.' });
     emitToColor(newGame, 'white', 'gameState', getGameState(newGame, 'white'));
     emitToColor(newGame, 'black', 'gameState', getGameState(newGame, 'black'));
@@ -398,12 +453,18 @@ io.on('connection', (socket) => {
       if (game.players[socket.id]) {
         const color = game.players[socket.id].color;
         const opponent = color === 'white' ? 'black' : 'white';
-        // Only notify a real opponent (bot has no socket)
-        if (game.colors[opponent]) {
-          io.to(game.colors[opponent]).emit('opponentDisconnected', {
-            message: 'Your opponent disconnected.'
-          });
-        }
+        const timerKey = `${gameId}_${color}`;
+
+        // Grace period: give the client 10s to rejoin before notifying opponent
+        disconnectTimers[timerKey] = setTimeout(() => {
+          delete disconnectTimers[timerKey];
+          // Only notify if the player hasn't rejoined (their socket id is still the stale one)
+          if (game.colors[color] === socket.id && game.colors[opponent]) {
+            io.to(game.colors[opponent]).emit('opponentDisconnected', {
+              message: 'Your opponent disconnected.'
+            });
+          }
+        }, 10000);
         break;
       }
     }

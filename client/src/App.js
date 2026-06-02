@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import ChessBoard from './components/ChessBoard';
 import { useSocket } from './hooks/useSocket';
-import { PIECE_NAMES, formatMove } from './utils/helpers';
+import { PIECE_NAMES, formatMove, colToFile, rowToRank } from './utils/helpers';
 import './App.css';
 
 function App() {
@@ -18,6 +18,7 @@ function App() {
   const [joinInput, setJoinInput] = useState('');
   const [waitingMessage, setWaitingMessage] = useState('');
   const [rematchRequested, setRematchRequested] = useState(false);
+  const [showOverlay, setShowOverlay] = useState(true);
   const [isSinglePlayer, setIsSinglePlayer] = useState(false);
   const [difficulty, setDifficulty] = useState('medium');
   const [preferredColor, setPreferredColor] = useState('white');
@@ -34,9 +35,10 @@ function App() {
 
   useEffect(() => {
     const unsubs = [
-      on('gameCreated', ({ gameId, color, singlePlayer }) => {
+      on('gameCreated', ({ gameId, color, singlePlayer, token }) => {
         setGameId(gameId);
         setMyColor(color);
+        if (token) sessionStorage.setItem('chessSession', JSON.stringify({ gameId, color, token }));
         if (singlePlayer) {
           setIsSinglePlayer(true);
           // Skip waiting screen — server emits gameStart immediately after
@@ -45,9 +47,21 @@ function App() {
           setWaitingMessage(`Share this Game ID with your friend: ${gameId}`);
         }
       }),
-      on('gameJoined', ({ gameId, color }) => {
+      on('gameJoined', ({ gameId, color, token }) => {
         setGameId(gameId);
         setMyColor(color);
+        if (token) sessionStorage.setItem('chessSession', JSON.stringify({ gameId, color, token }));
+      }),
+      on('gameRejoined', ({ color, gameId: gid, singlePlayer, status }) => {
+        setMyColor(color);
+        setGameId(gid);
+        setIsSinglePlayer(singlePlayer || false);
+        if (status === 'waiting') {
+          setScreen('waiting');
+          setWaitingMessage(`Share this Game ID with your friend: ${gid}`);
+        }
+        // 'selecting' screen is restored by the gameStart event the server also emits
+        // 'playing' / 'finished' screens are restored by the gameState event that follows
       }),
       on('gameStart', ({ message }) => {
         setScreen('selecting');
@@ -55,6 +69,8 @@ function App() {
       }),
       on('gameState', (state) => {
         setGameState(state);
+        // Restore color from embedded state in case gameRejoined hasn't fired yet
+        if (state.myColor) setMyColor(state.myColor);
         if (state.status === 'playing') setScreen('playing');
         if (state.status === 'finished') setScreen('finished');
       }),
@@ -78,6 +94,7 @@ function App() {
       }),
       on('gameOver', (info) => {
         setGameOverInfo(info);
+        setShowOverlay(true);
         setInCheck(false);
         addAlert(info.message, info.reason === 'stalemate' ? 'info' : 'success', 10000);
       }),
@@ -90,16 +107,27 @@ function App() {
           addAlert('Opponent wants a rematch!', 'info', 8000);
         }
       }),
-      on('rematchStarted', ({ color }) => {
+      on('rematchStarted', ({ color, token }) => {
         setMyColor(color);
         setGameState(null);
         setGameOverInfo(null);
+        setShowOverlay(true);
         setRematchRequested(false);
         setInCheck(false);
         setSelectedSquare(null);
         setLegalMoves([]);
         setAlerts([]);
         setScreen('selecting');
+        // Update stored session so reconnect logic uses the new token
+        if (token) {
+          try {
+            const raw = sessionStorage.getItem('chessSession');
+            if (raw) {
+              const prev = JSON.parse(raw);
+              sessionStorage.setItem('chessSession', JSON.stringify({ gameId: prev.gameId, color, token }));
+            }
+          } catch (_) {}
+        }
       }),
       on('error', ({ message }) => {
         addAlert(`Error: ${message}`, 'error');
@@ -155,6 +183,10 @@ function App() {
 
   const handleRematch = () => emit('requestRematch', { gameId });
   const handleAcceptRematch = () => emit('acceptRematch', { gameId });
+  const handleLeaveGame = () => {
+    sessionStorage.removeItem('chessSession');
+    window.location.reload();
+  };
 
   const lastMove = gameState?.moveHistory?.slice(-1)[0] || null;
   const isMyTurn = gameState?.turn === myColor;
@@ -329,8 +361,16 @@ function App() {
             />
           )}
 
+          {screen === 'finished' && (
+            <div className="king-legend">
+              <span className="legend-own">★ Your true king</span>
+              <span className="legend-sep">·</span>
+              <span className="legend-opponent">◆ Opponent's true king</span>
+            </div>
+          )}
+
           {/* Game over overlay */}
-          {screen === 'finished' && gameOverInfo && (
+          {screen === 'finished' && gameOverInfo && showOverlay && (
             <div className="game-over-overlay">
               <div className="game-over-card">
                 <div className="game-over-icon">
@@ -342,11 +382,19 @@ function App() {
                   {gameOverInfo.reason === 'checkmate' && 'The true king was checkmated'}
                   {gameOverInfo.reason === 'stalemate' && 'No legal moves remaining'}
                 </p>
+                {gameOverInfo.reason === 'capture' && gameOverInfo.capturedKingType && (
+                  <p className="game-over-capture-detail">
+                    {`${gameOverInfo.capturedKingColor === 'white' ? 'White' : 'Black'}'s true king was the ${PIECE_NAMES[gameOverInfo.capturedKingType]}, captured on ${colToFile(gameOverInfo.capturedKingSquare[1])}${rowToRank(gameOverInfo.capturedKingSquare[0])}`}
+                  </p>
+                )}
+                <button className="btn-view-board" onClick={() => setShowOverlay(false)}>
+                  View Board
+                </button>
                 <div className="game-over-actions">
                   {isSinglePlayer ? (
                     <>
                       <button className="btn primary" onClick={handleAcceptRematch}>Play Again</button>
-                      <button className="btn secondary" onClick={() => window.location.reload()}>Main Menu</button>
+                      <button className="btn secondary" onClick={handleLeaveGame}>Main Menu</button>
                     </>
                   ) : (
                     <>
@@ -355,12 +403,18 @@ function App() {
                       ) : (
                         <button className="btn primary" onClick={handleAcceptRematch}>Accept Rematch</button>
                       )}
-                      <button className="btn secondary" onClick={() => window.location.reload()}>New Game</button>
+                      <button className="btn secondary" onClick={handleLeaveGame}>New Game</button>
                     </>
                   )}
                 </div>
               </div>
             </div>
+          )}
+
+          {screen === 'finished' && gameOverInfo && !showOverlay && (
+            <button className="game-over-restore" onClick={() => setShowOverlay(true)}>
+              Results
+            </button>
           )}
         </div>
 

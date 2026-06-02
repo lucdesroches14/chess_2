@@ -11,10 +11,39 @@ export function useSocket() {
     const socket = io(SERVER_URL, { transports: ['websocket', 'polling'] });
     socketRef.current = socket;
 
-    socket.on('connect', () => setConnected(true));
+    socket.on('connect', () => {
+      setConnected(true);
+      // Attempt to resume any in-progress game after every (re)connect
+      try {
+        const raw = sessionStorage.getItem('chessSession');
+        if (raw) {
+          const { gameId, token } = JSON.parse(raw);
+          if (gameId && token) socket.emit('rejoinGame', { gameId, token });
+        }
+      } catch (_) {}
+    });
+
     socket.on('disconnect', () => setConnected(false));
 
-    return () => socket.disconnect();
+    // When the app returns to the foreground after being backgrounded,
+    // reconnect the socket if it dropped while the screen was off.
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && !socket.connected) {
+        socket.connect();
+      }
+    };
+    const handlePageShow = () => {
+      if (!socket.connected) socket.connect();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pageshow', handlePageShow);
+
+    return () => {
+      socket.disconnect();
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pageshow', handlePageShow);
+    };
   }, []);
 
   const emit = useCallback((event, data) => {
