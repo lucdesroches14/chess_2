@@ -12,15 +12,18 @@ export default function ChessBoard({
   onKingSelect,
   selectedSquare,
   legalMoves,
+  lastMove,
   inCheck
 }) {
   const isFlipped = myColor === 'black';
 
-  const rows = isFlipped ? [0,1,2,3,4,5,6,7] : [7,6,5,4,3,2,1,0];
+  const rows = isFlipped ? [7,6,5,4,3,2,1,0] : [0,1,2,3,4,5,6,7];
   const cols = isFlipped ? [7,6,5,4,3,2,1,0] : [0,1,2,3,4,5,6,7];
 
   const isLegalMove = (row, col) => legalMoves.some(([r,c]) => r === row && c === col);
   const isSelected = (row, col) => selectedSquare && selectedSquare[0] === row && selectedSquare[1] === col;
+  const isLastMoveFrom = (row, col) => lastMove && lastMove.from[0] === row && lastMove.from[1] === col;
+  const isLastMoveTo = (row, col) => lastMove && lastMove.to[0] === row && lastMove.to[1] === col;
 
   const getTrueKingPos = () => {
     if (!myTrueKingId || !board) return null;
@@ -90,6 +93,8 @@ export default function ChessBoard({
                     'square',
                     sq,
                     selected ? 'selected' : '',
+                    !selected && isLastMoveFrom(row, col) ? 'last-move-from' : '',
+                    !selected && isLastMoveTo(row, col) ? 'last-move-to' : '',
                     legal ? (piece ? 'capturable' : 'legal') : '',
                     check ? 'in-check' : '',
                     canSelect ? 'can-select' : '',

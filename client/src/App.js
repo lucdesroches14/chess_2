@@ -18,6 +18,9 @@ function App() {
   const [joinInput, setJoinInput] = useState('');
   const [waitingMessage, setWaitingMessage] = useState('');
   const [rematchRequested, setRematchRequested] = useState(false);
+  const [isSinglePlayer, setIsSinglePlayer] = useState(false);
+  const [difficulty, setDifficulty] = useState('medium');
+  const [preferredColor, setPreferredColor] = useState('white');
   const alertTimers = useRef([]);
 
   const addAlert = useCallback((msg, type = 'info', duration = 4000) => {
@@ -31,11 +34,16 @@ function App() {
 
   useEffect(() => {
     const unsubs = [
-      on('gameCreated', ({ gameId, color }) => {
+      on('gameCreated', ({ gameId, color, singlePlayer }) => {
         setGameId(gameId);
         setMyColor(color);
-        setScreen('waiting');
-        setWaitingMessage(`Share this Game ID with your friend: ${gameId}`);
+        if (singlePlayer) {
+          setIsSinglePlayer(true);
+          // Skip waiting screen — server emits gameStart immediately after
+        } else {
+          setScreen('waiting');
+          setWaitingMessage(`Share this Game ID with your friend: ${gameId}`);
+        }
       }),
       on('gameJoined', ({ gameId, color }) => {
         setGameId(gameId);
@@ -115,6 +123,10 @@ function App() {
     emit('joinGame', { gameId: joinInput.trim() });
   };
 
+  const handleVsComputer = () => {
+    emit('createSinglePlayer', { difficulty, color: preferredColor });
+  };
+
   const handleKingSelect = (pieceId) => {
     emit('selectKing', { gameId, pieceId });
     addAlert('King selected! Waiting for opponent...', 'success');
@@ -125,7 +137,6 @@ function App() {
 
     const piece = gameState.board[row][col];
 
-    // If clicking a legal move target
     if (selectedSquare && legalMoves.some(([r,c]) => r === row && c === col)) {
       emit('makeMove', { gameId, from: selectedSquare, to: [row, col] });
       setSelectedSquare(null);
@@ -133,13 +144,11 @@ function App() {
       return;
     }
 
-    // If clicking own piece, request legal moves
     if (piece && piece.color === myColor) {
       emit('requestMoves', { gameId, row, col });
       return;
     }
 
-    // Deselect
     setSelectedSquare(null);
     setLegalMoves([]);
   }, [gameState, myColor, screen, selectedSquare, legalMoves, emit, gameId]);
@@ -149,6 +158,10 @@ function App() {
 
   const lastMove = gameState?.moveHistory?.slice(-1)[0] || null;
   const isMyTurn = gameState?.turn === myColor;
+  const opponentColor = myColor === 'white' ? 'black' : 'white';
+  const opponentLabel = isSinglePlayer ? `Computer (${opponentColor})` : `Opponent (${opponentColor})`;
+
+  const DIFFICULTY_LABELS = { easy: 'Easy', medium: 'Medium', hard: 'Hard' };
 
   // ---- RENDER SCREENS ----
 
@@ -176,6 +189,45 @@ function App() {
               />
               <button className="btn secondary" onClick={handleJoinGame} disabled={!connected || !joinInput.trim()}>
                 Join
+              </button>
+            </div>
+            <div className="divider"><span>or</span></div>
+            <div className="vs-computer">
+              <div className="vc-options">
+                <div className="vc-option-group">
+                  <span className="vc-label">Difficulty</span>
+                  <div className="vc-pills">
+                    {['easy', 'medium', 'hard'].map(d => (
+                      <button
+                        key={d}
+                        className={`vc-pill ${difficulty === d ? 'active' : ''}`}
+                        onClick={() => setDifficulty(d)}
+                      >
+                        {DIFFICULTY_LABELS[d]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="vc-option-group">
+                  <span className="vc-label">Play as</span>
+                  <div className="vc-pills">
+                    <button
+                      className={`vc-pill ${preferredColor === 'white' ? 'active' : ''}`}
+                      onClick={() => setPreferredColor('white')}
+                    >
+                      White
+                    </button>
+                    <button
+                      className={`vc-pill ${preferredColor === 'black' ? 'active' : ''}`}
+                      onClick={() => setPreferredColor('black')}
+                    >
+                      Black
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <button className="btn primary" onClick={handleVsComputer} disabled={!connected}>
+                Play vs Computer
               </button>
             </div>
           </div>
@@ -232,10 +284,10 @@ function App() {
                 {isMyTurn && screen === 'playing' && <div className="your-turn">Your turn</div>}
               </div>
             </div>
-            <div className={`player-card ${myColor === 'white' ? 'black' : 'white'} ${!isMyTurn && screen === 'playing' ? 'active' : ''}`}>
+            <div className={`player-card ${opponentColor} ${!isMyTurn && screen === 'playing' ? 'active' : ''}`}>
               <span className="player-symbol">{myColor === 'white' ? '♚' : '♔'}</span>
               <div>
-                <div className="player-name">Opponent ({myColor === 'white' ? 'black' : 'white'})</div>
+                <div className="player-name">{opponentLabel}</div>
                 {!isMyTurn && screen === 'playing' && <div className="thinking">Thinking...</div>}
               </div>
             </div>
@@ -245,7 +297,6 @@ function App() {
             <div className="check-banner">⚠️ YOUR KING IS IN CHECK</div>
           )}
 
-          {/* Captured pieces */}
           {gameState?.capturedPieces && (
             <div className="captured">
               <div className="captured-row">
@@ -292,12 +343,21 @@ function App() {
                   {gameOverInfo.reason === 'stalemate' && 'No legal moves remaining'}
                 </p>
                 <div className="game-over-actions">
-                  {!rematchRequested ? (
-                    <button className="btn primary" onClick={handleRematch}>Request Rematch</button>
+                  {isSinglePlayer ? (
+                    <>
+                      <button className="btn primary" onClick={handleAcceptRematch}>Play Again</button>
+                      <button className="btn secondary" onClick={() => window.location.reload()}>Main Menu</button>
+                    </>
                   ) : (
-                    <button className="btn primary" onClick={handleAcceptRematch}>Accept Rematch</button>
+                    <>
+                      {!rematchRequested ? (
+                        <button className="btn primary" onClick={handleRematch}>Request Rematch</button>
+                      ) : (
+                        <button className="btn primary" onClick={handleAcceptRematch}>Accept Rematch</button>
+                      )}
+                      <button className="btn secondary" onClick={() => window.location.reload()}>New Game</button>
+                    </>
                   )}
-                  <button className="btn secondary" onClick={() => window.location.reload()}>New Game</button>
                 </div>
               </div>
             </div>

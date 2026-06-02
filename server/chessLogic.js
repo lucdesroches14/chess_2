@@ -235,5 +235,7 @@ module.exports = {
   isCheckmate,
   isStalemate,
   applyMoveWithCastling,
-  findTrueKing
+  findTrueKing,
+  getPseudoLegalMoves,
+  isSquareAttackedBy
 };

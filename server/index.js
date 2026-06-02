@@ -9,9 +9,9 @@ const {
   isTrueKingInCheck,
   isCheckmate,
   isStalemate,
-  applyMoveWithCastling,
-  findTrueKing
+  applyMoveWithCastling
 } = require('./chessLogic');
+const { selectBotKing, chooseBotMove } = require('./bot');
 
 const app = express();
 app.use(cors());
@@ -22,15 +22,14 @@ const io = new Server(httpServer, {
   cors: { origin: '*', methods: ['GET', 'POST'] }
 });
 
-// Game rooms storage
 const games = {};
 
 function createGame() {
   return {
     id: uuidv4(),
     board: initialBoard(),
-    players: {}, // socketId -> { color, trueKingId }
-    colors: {}, // color -> socketId
+    players: {},        // socketId -> { color }
+    colors: {},         // color -> socketId (null for bot)
     trueKings: { white: null, black: null },
     kingSelectionDone: { white: false, black: false },
     castlingRights: {
@@ -38,15 +37,17 @@ function createGame() {
       black: { kingSide: true, queenSide: true }
     },
     turn: 'white',
-    status: 'waiting', // waiting | selecting | playing | finished
+    status: 'waiting',  // waiting | selecting | playing | finished
     winner: null,
     moveHistory: [],
-    capturedPieces: { white: [], black: [] }
+    capturedPieces: { white: [], black: [] },
+    mode: 'multiplayer', // multiplayer | single
+    botColor: null,
+    difficulty: 'medium'
   };
 }
 
 function getGameState(game, forColor) {
-  // Sanitize: never send opponent's true king identity
   return {
     board: game.board,
     turn: game.turn,
@@ -58,17 +59,136 @@ function getGameState(game, forColor) {
     moveHistory: game.moveHistory,
     capturedPieces: game.capturedPieces,
     kingSelectionDone: game.kingSelectionDone,
-    // Reveal opponent king only when game is finished
     opponentTrueKingId: game.status === 'finished'
       ? game.trueKings[forColor === 'white' ? 'black' : 'white']
       : null
   };
 }
 
+// Safe emit helpers — no-op when the color has no socket (bot)
+function emitToColor(game, color, event, data) {
+  const sid = game.colors[color];
+  if (sid) io.to(sid).emit(event, data);
+}
+
+function broadcastToPlayers(game, event, data) {
+  emitToColor(game, 'white', event, data);
+  emitToColor(game, 'black', event, data);
+}
+
+// Core move application — mutates game, emits events, handles win/draw detection.
+// Callers are responsible for validating the move is legal before calling this.
+function resolveMove(game, movingColor, from, to) {
+  const piece = game.board[from[0]][from[1]];
+  const opponent = movingColor === 'white' ? 'black' : 'white';
+  const targetPiece = game.board[to[0]][to[1]];
+  const opponentKingCaptured = targetPiece && targetPiece.id === game.trueKings[opponent];
+
+  const { newBoard, newCastlingRights } = applyMoveWithCastling(
+    game.board, from, to, { trueKings: game.trueKings, castlingRights: game.castlingRights }
+  );
+
+  game.moveHistory.push({
+    from, to,
+    piece: piece.type,
+    color: movingColor,
+    captured: targetPiece ? targetPiece.type : null
+  });
+  if (targetPiece) game.capturedPieces[movingColor].push(targetPiece.type);
+  game.board = newBoard;
+  game.castlingRights = newCastlingRights;
+
+  if (opponentKingCaptured) {
+    game.status = 'finished';
+    game.winner = movingColor;
+    emitToColor(game, 'white', 'gameState', getGameState(game, 'white'));
+    emitToColor(game, 'black', 'gameState', getGameState(game, 'black'));
+    broadcastToPlayers(game, 'gameOver', {
+      reason: 'capture',
+      winner: movingColor,
+      message: `${movingColor === 'white' ? 'White' : 'Black'} Wins!`
+    });
+    return;
+  }
+
+  game.turn = opponent;
+
+  const gsForLogic = { trueKings: game.trueKings, castlingRights: game.castlingRights };
+  const opponentInCheck = isTrueKingInCheck(game.board, opponent, game.trueKings[opponent]);
+
+  if (opponentInCheck && isCheckmate(game.board, opponent, gsForLogic)) {
+    game.status = 'finished';
+    game.winner = movingColor;
+    emitToColor(game, 'white', 'gameState', getGameState(game, 'white'));
+    emitToColor(game, 'black', 'gameState', getGameState(game, 'black'));
+    broadcastToPlayers(game, 'gameOver', {
+      reason: 'checkmate',
+      winner: movingColor,
+      message: `Checkmate - ${movingColor === 'white' ? 'White' : 'Black'} Wins!`
+    });
+    return;
+  }
+
+  if (isStalemate(game.board, opponent, gsForLogic)) {
+    game.status = 'finished';
+    game.winner = null;
+    emitToColor(game, 'white', 'gameState', getGameState(game, 'white'));
+    emitToColor(game, 'black', 'gameState', getGameState(game, 'black'));
+    broadcastToPlayers(game, 'gameOver', {
+      reason: 'stalemate',
+      winner: null,
+      message: 'Stalemate - Draw!'
+    });
+    return;
+  }
+
+  emitToColor(game, 'white', 'gameState', getGameState(game, 'white'));
+  emitToColor(game, 'black', 'gameState', getGameState(game, 'black'));
+
+  if (opponentInCheck) {
+    emitToColor(game, opponent, 'inCheck', { message: 'Your king is in check!' });
+  }
+}
+
+async function triggerBotMove(gameId) {
+  const game = games[gameId];
+  if (!game || game.status !== 'playing' || game.turn !== game.botColor) return;
+
+  // Artificial thinking delay so the UI "Thinking..." state is visible
+  const delay = 400 + Math.floor(Math.random() * 800);
+  await new Promise(resolve => setTimeout(resolve, delay));
+
+  const current = games[gameId];
+  if (!current || current.status !== 'playing' || current.turn !== current.botColor) return;
+
+  // Build a bot-safe gameState: bot knows its own true king but not the human's
+  const humanColor = current.botColor === 'white' ? 'black' : 'white';
+  const fallbackHumanKingId = `${humanColor[0]}_k_4`;
+  const botGameState = {
+    trueKings: {
+      [current.botColor]: current.trueKings[current.botColor],
+      [humanColor]: fallbackHumanKingId
+    },
+    castlingRights: current.castlingRights
+  };
+
+  const move = chooseBotMove(current.board, current.botColor, botGameState, current.difficulty);
+  if (!move) return;
+
+  // Belt-and-suspenders: validate using the real trueKings
+  const gsReal = { trueKings: current.trueKings, castlingRights: current.castlingRights };
+  const legal = getLegalMoves(current.board, move.from[0], move.from[1], gsReal);
+  if (!legal.some(([r, c]) => r === move.to[0] && c === move.to[1])) {
+    console.error('Bot chose illegal move:', move);
+    return;
+  }
+
+  resolveMove(current, current.botColor, move.from, move.to);
+}
+
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
 
-  // Create a new game room
   socket.on('createGame', () => {
     const game = createGame();
     games[game.id] = game;
@@ -79,32 +199,52 @@ io.on('connection', (socket) => {
     console.log('Game created:', game.id);
   });
 
-  // Join existing game
+  socket.on('createSinglePlayer', ({ difficulty = 'medium', color = 'white' } = {}) => {
+    const game = createGame();
+    games[game.id] = game;
+
+    const humanColor = color;
+    const botColor = color === 'white' ? 'black' : 'white';
+
+    game.mode = 'single';
+    game.difficulty = difficulty;
+    game.botColor = botColor;
+
+    game.players[socket.id] = { color: humanColor };
+    game.colors[humanColor] = socket.id;
+    game.colors[botColor] = null; // bot has no socket
+
+    // Bot auto-selects its true king immediately
+    game.trueKings[botColor] = selectBotKing(game.board, botColor);
+    game.kingSelectionDone[botColor] = true;
+
+    game.status = 'selecting';
+    socket.join(game.id);
+
+    // singlePlayer flag tells the client to skip the waiting screen
+    socket.emit('gameCreated', { gameId: game.id, color: humanColor, singlePlayer: true });
+    socket.emit('gameStart', { message: 'Choose your true king.' });
+    socket.emit('gameState', getGameState(game, humanColor));
+    console.log('Single-player game created:', game.id, 'difficulty:', difficulty);
+  });
+
   socket.on('joinGame', ({ gameId }) => {
     const game = games[gameId];
-    if (!game) {
-      socket.emit('error', { message: 'Game not found' });
-      return;
-    }
-    if (Object.keys(game.players).length >= 2) {
-      socket.emit('error', { message: 'Game is full' });
-      return;
-    }
+    if (!game) { socket.emit('error', { message: 'Game not found' }); return; }
+    if (Object.keys(game.players).length >= 2) { socket.emit('error', { message: 'Game is full' }); return; }
+
     game.players[socket.id] = { color: 'black' };
     game.colors['black'] = socket.id;
     socket.join(gameId);
     game.status = 'selecting';
 
     socket.emit('gameJoined', { gameId, color: 'black' });
-
-    // Notify both players to select their kings
     io.to(gameId).emit('gameStart', { message: 'Both players connected. Select your true king.' });
-    io.to(game.colors['white']).emit('gameState', getGameState(game, 'white'));
-    io.to(game.colors['black']).emit('gameState', getGameState(game, 'black'));
+    emitToColor(game, 'white', 'gameState', getGameState(game, 'white'));
+    emitToColor(game, 'black', 'gameState', getGameState(game, 'black'));
     console.log('Player joined game:', gameId);
   });
 
-  // Player selects their true king
   socket.on('selectKing', ({ gameId, pieceId }) => {
     const game = games[gameId];
     if (!game || game.status !== 'selecting') return;
@@ -115,41 +255,35 @@ io.on('connection', (socket) => {
     const color = player.color;
     if (game.kingSelectionDone[color]) return;
 
-    // Validate piece belongs to this player
     let pieceFound = false;
     for (let r = 0; r < 8; r++) {
       for (let c = 0; c < 8; c++) {
         const piece = game.board[r][c];
-        if (piece && piece.id === pieceId && piece.color === color) {
-          pieceFound = true;
-          break;
-        }
+        if (piece && piece.id === pieceId && piece.color === color) { pieceFound = true; break; }
       }
     }
-    if (!pieceFound) {
-      socket.emit('error', { message: 'Invalid piece selection' });
-      return;
-    }
+    if (!pieceFound) { socket.emit('error', { message: 'Invalid piece selection' }); return; }
 
     game.trueKings[color] = pieceId;
     game.kingSelectionDone[color] = true;
-
     socket.emit('kingSelected', { pieceId });
     console.log(`${color} selected king: ${pieceId}`);
 
-    // If both players have selected, start the game
     if (game.kingSelectionDone.white && game.kingSelectionDone.black) {
       game.status = 'playing';
-      io.to(game.colors['white']).emit('gameState', getGameState(game, 'white'));
-      io.to(game.colors['black']).emit('gameState', getGameState(game, 'black'));
-      io.to(gameId).emit('gameReady', { message: 'Game started! White moves first.' });
+      emitToColor(game, 'white', 'gameState', getGameState(game, 'white'));
+      emitToColor(game, 'black', 'gameState', getGameState(game, 'black'));
+      broadcastToPlayers(game, 'gameReady', { message: 'Game started! White moves first.' });
+
+      // In single-player, if bot has first move (human chose black), trigger it
+      if (game.mode === 'single' && game.turn === game.botColor) {
+        triggerBotMove(game.id);
+      }
     } else {
-      // Tell this player to wait
       socket.emit('waitingForOpponent', { message: 'Waiting for opponent to select their king...' });
     }
   });
 
-  // Player requests legal moves for a piece
   socket.on('requestMoves', ({ gameId, row, col }) => {
     const game = games[gameId];
     if (!game || game.status !== 'playing') return;
@@ -160,17 +294,14 @@ io.on('connection', (socket) => {
     const piece = game.board[row][col];
     if (!piece || piece.color !== player.color) return;
 
-    const gameStateForLogic = {
+    const moves = getLegalMoves(game.board, row, col, {
       trueKings: game.trueKings,
       castlingRights: game.castlingRights
-    };
-
-    const moves = getLegalMoves(game.board, row, col, gameStateForLogic);
+    });
     socket.emit('legalMoves', { moves, from: [row, col] });
   });
 
-  // Player makes a move
-  socket.on('makeMove', ({ gameId, from, to, promoteTo }) => {
+  socket.on('makeMove', ({ gameId, from, to }) => {
     const game = games[gameId];
     if (!game || game.status !== 'playing') return;
 
@@ -186,115 +317,27 @@ io.on('connection', (socket) => {
       return;
     }
 
-    const gameStateForLogic = {
-      trueKings: game.trueKings,
-      castlingRights: game.castlingRights
-    };
-
-    const legalMoves = getLegalMoves(game.board, from[0], from[1], gameStateForLogic);
-    const isLegal = legalMoves.some(([r, c]) => r === to[0] && c === to[1]);
-
-    if (!isLegal) {
+    const gsForLogic = { trueKings: game.trueKings, castlingRights: game.castlingRights };
+    const legalMoves = getLegalMoves(game.board, from[0], from[1], gsForLogic);
+    if (!legalMoves.some(([r, c]) => r === to[0] && c === to[1])) {
       socket.emit('error', { message: 'Illegal move' });
       return;
     }
 
-    // Check if opponent's true king is captured
-    const targetPiece = game.board[to[0]][to[1]];
-    const opponent = player.color === 'white' ? 'black' : 'white';
-    const opponentKingCaptured = targetPiece && targetPiece.id === game.trueKings[opponent];
+    resolveMove(game, player.color, from, to);
 
-    // Apply move
-    const { newBoard, newCastlingRights } = applyMoveWithCastling(
-      game.board, from, to, { ...gameStateForLogic, castlingRights: game.castlingRights }
-    );
-
-    // Record move history
-    game.moveHistory.push({
-      from, to,
-      piece: piece.type,
-      color: player.color,
-      captured: targetPiece ? targetPiece.type : null
-    });
-
-    if (targetPiece) {
-      game.capturedPieces[player.color].push(targetPiece.type);
-    }
-
-    game.board = newBoard;
-    game.castlingRights = newCastlingRights;
-
-    // Check win condition: opponent's true king captured
-    if (opponentKingCaptured) {
-      game.status = 'finished';
-      game.winner = player.color;
-      io.to(game.colors['white']).emit('gameState', getGameState(game, 'white'));
-      io.to(game.colors['black']).emit('gameState', getGameState(game, 'black'));
-      io.to(gameId).emit('gameOver', {
-        reason: 'capture',
-        winner: player.color,
-        message: `${player.color === 'white' ? 'White' : 'Black'} Wins!`
-      });
-      return;
-    }
-
-    // Switch turns
-    game.turn = opponent;
-
-    const newGameStateForLogic = {
-      trueKings: game.trueKings,
-      castlingRights: game.castlingRights
-    };
-
-    // Check if opponent's true king is now in check
-    const opponentInCheck = isTrueKingInCheck(game.board, opponent, game.trueKings[opponent]);
-
-    // Check for checkmate: opponent has no legal moves AND their king is in check
-    if (opponentInCheck && isCheckmate(game.board, opponent, newGameStateForLogic)) {
-      game.status = 'finished';
-      game.winner = player.color;
-      io.to(game.colors['white']).emit('gameState', getGameState(game, 'white'));
-      io.to(game.colors['black']).emit('gameState', getGameState(game, 'black'));
-      io.to(gameId).emit('gameOver', {
-        reason: 'checkmate',
-        winner: player.color,
-        message: `Checkmate - ${player.color === 'white' ? 'White' : 'Black'} Wins!`
-      });
-      return;
-    }
-
-    // Check for stalemate
-    if (isStalemate(game.board, opponent, newGameStateForLogic)) {
-      game.status = 'finished';
-      game.winner = null;
-      io.to(game.colors['white']).emit('gameState', getGameState(game, 'white'));
-      io.to(game.colors['black']).emit('gameState', getGameState(game, 'black'));
-      io.to(gameId).emit('gameOver', {
-        reason: 'stalemate',
-        winner: null,
-        message: 'Stalemate - Draw!'
-      });
-      return;
-    }
-
-    // Send updated state to both players
-    io.to(game.colors['white']).emit('gameState', getGameState(game, 'white'));
-    io.to(game.colors['black']).emit('gameState', getGameState(game, 'black'));
-
-    // Send private check alert to player in check
-    if (opponentInCheck) {
-      io.to(game.colors[opponent]).emit('inCheck', {
-        message: 'Your king is in check!'
-      });
+    if (game.mode === 'single' && game.status === 'playing' && game.turn === game.botColor) {
+      triggerBotMove(gameId);
     }
   });
 
-  // Rematch request
   socket.on('requestRematch', ({ gameId }) => {
     const game = games[gameId];
     if (!game) return;
     const player = game.players[socket.id];
     if (!player) return;
+    // In single-player the client shows "Play Again" which calls acceptRematch directly
+    if (game.mode === 'single') return;
     io.to(gameId).emit('rematchRequested', { by: player.color });
   });
 
@@ -302,9 +345,36 @@ io.on('connection', (socket) => {
     const oldGame = games[gameId];
     if (!oldGame) return;
 
+    if (oldGame.mode === 'single') {
+      // Single-player rematch: swap colors, re-seat bot, auto-select bot king
+      const oldHumanColor = oldGame.botColor === 'white' ? 'black' : 'white';
+      const newHumanColor = oldGame.botColor;
+      const newBotColor = oldHumanColor;
+
+      const newGame = createGame();
+      newGame.id = gameId;
+      newGame.mode = 'single';
+      newGame.difficulty = oldGame.difficulty;
+      newGame.botColor = newBotColor;
+
+      newGame.players[socket.id] = { color: newHumanColor };
+      newGame.colors[newHumanColor] = socket.id;
+      newGame.colors[newBotColor] = null;
+
+      newGame.trueKings[newBotColor] = selectBotKing(newGame.board, newBotColor);
+      newGame.kingSelectionDone[newBotColor] = true;
+      newGame.status = 'selecting';
+      games[gameId] = newGame;
+
+      socket.emit('rematchStarted', { color: newHumanColor });
+      socket.emit('gameStart', { message: 'Rematch! Choose your true king.' });
+      socket.emit('gameState', getGameState(newGame, newHumanColor));
+      return;
+    }
+
+    // Multiplayer rematch: swap colors
     const newGame = createGame();
-    newGame.id = gameId; // Keep same room ID
-    // Swap colors for rematch
+    newGame.id = gameId;
     const whiteSocketId = oldGame.colors['white'];
     const blackSocketId = oldGame.colors['black'];
     newGame.players[whiteSocketId] = { color: 'black' };
@@ -317,18 +387,18 @@ io.on('connection', (socket) => {
     io.to(newGame.colors['white']).emit('rematchStarted', { color: 'white' });
     io.to(newGame.colors['black']).emit('rematchStarted', { color: 'black' });
     io.to(gameId).emit('gameStart', { message: 'Rematch! Select your true king.' });
-    io.to(newGame.colors['white']).emit('gameState', getGameState(newGame, 'white'));
-    io.to(newGame.colors['black']).emit('gameState', getGameState(newGame, 'black'));
+    emitToColor(newGame, 'white', 'gameState', getGameState(newGame, 'white'));
+    emitToColor(newGame, 'black', 'gameState', getGameState(newGame, 'black'));
   });
 
   socket.on('disconnect', () => {
     console.log('Client disconnected:', socket.id);
-    // Notify opponent if in a game
     for (const gameId in games) {
       const game = games[gameId];
       if (game.players[socket.id]) {
         const color = game.players[socket.id].color;
         const opponent = color === 'white' ? 'black' : 'white';
+        // Only notify a real opponent (bot has no socket)
         if (game.colors[opponent]) {
           io.to(game.colors[opponent]).emit('opponentDisconnected', {
             message: 'Your opponent disconnected.'
@@ -340,7 +410,6 @@ io.on('connection', (socket) => {
   });
 });
 
-// Health check
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 const PORT = process.env.PORT || 3001;
