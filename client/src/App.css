@@ -736,7 +736,14 @@ body {
 
 /* ========== RESPONSIVE ========== */
 @media (max-width: 900px) {
-  .game-layout { flex-direction: column; align-items: center; padding: 1rem; gap: 1rem; }
+  .game-layout {
+    flex-direction: column;
+    align-items: center;
+    padding: 1rem;
+    /* ensure content clears iOS Safari bottom chrome + notch */
+    padding-bottom: max(5rem, calc(env(safe-area-inset-bottom, 0px) + 4rem));
+    gap: 1rem;
+  }
   .sidebar { width: 100%; max-width: 580px; flex-direction: row; flex-wrap: wrap; }
   .move-history { max-height: 150px; flex: 1; min-width: 200px; }
   .rules-reminder { flex: 1; min-width: 200px; }
@@ -745,8 +752,20 @@ body {
   .piece { font-size: 2.4rem; }
 }
 
+/* phones ≤600px: tighten horizontal padding so 44px squares (372px board) fit ~390px+ screens */
 @media (max-width: 600px) {
+  .game-layout { padding: 0.5rem; padding-bottom: max(5rem, calc(env(safe-area-inset-bottom, 0px) + 4rem)); }
   .square { width: 44px; height: 44px; }
   .file-label { width: 44px; }
   .piece { font-size: 1.9rem; }
+}
+
+/* narrow phones ≤430px (e.g. 360–375px): shrink squares so board (336px) fits without scroll */
+@media (max-width: 430px) {
+  .rank-label { width: 16px; font-size: 0.55rem; }
+  .rank-spacer { width: 16px; }
+  .square { width: 40px; height: 40px; }
+  .file-label { width: 40px; }
+  .piece { font-size: 1.6rem; }
+  .dot { width: 16px; height: 16px; }
 }

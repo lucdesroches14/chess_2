@@ -1,6 +1,6 @@
 export const PIECE_UNICODE = {
-  white: { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' },
-  black: { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' }
+  white: { k: '♔︎', q: '♕︎', r: '♖︎', b: '♗︎', n: '♘︎', p: '♙︎' },
+  black: { k: '♚︎', q: '♛︎', r: '♜︎', b: '♝︎', n: '♞︎', p: '♟︎' }
 };
 
 export const PIECE_NAMES = {
